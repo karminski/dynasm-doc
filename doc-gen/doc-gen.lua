@@ -69,6 +69,7 @@ function usual_docgen(fname, pre_pass)
     b = code_snippets[b].contents:gsub("[<>&]", html_escapes)
     return a .. b .. c
   end)
+  -- generate diff contents   
   contents = contents:gsub('(<pre class="diff">)(.-)(</pre>)', function(a, b, c)
     b = b:gsub('([+-])(%S*)(%s*)', function(a, b, c)
       local span = '<span class="'.. (a == "+" and "p" or "m") ..'">'

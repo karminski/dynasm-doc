@@ -1,36 +1,38 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+
+<head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>The Unofficial DynASM Documentation</title>
+    <title>DynASM 非官方文档</title>
     <link href="css/bootstrap.min.css" rel="stylesheet">
     <link href="css/dynasm-doc.css" rel="stylesheet">
-  </head>
-  <body data-spy="scroll" data-target=".sidenav">
+</head>
+
+<body data-spy="scroll" data-target=".sidenav">
     <div class="navbar navbar-default" role="navigation">
-      <div class="container">
-        <div class="navbar-header" id="top">
-          <a class="navbar-brand" href="index.html">The Unofficial DynASM Documentation</a>
+        <div class="container">
+            <div class="navbar-header" id="top">
+                <a class="navbar-brand" href="index.html">DynASM 非官方文档</a>
+            </div>
+            <div class="navbar-collapse collapse">
+                <ul class="nav navbar-nav">
+                    <li><a href="index.html">首页</a></li>
+                    <li class="active"><a href="tutorial.html">教程</a></li>
+                    <li><a href="reference.html">参考文档</a></li>
+                    <li><a href="instructions.html">指令集列表</a></li>
+                </ul>
+            </div>
         </div>
-        <div class="navbar-collapse collapse">
-          <ul class="nav navbar-nav">
-            <li><a href="index.html">Home</a></li>
-            <li class="active"><a href="tutorial.html">Tutorial</a></li>
-            <li><a href="reference.html">Reference</a></li>
-            <li><a href="instructions.html">Instruction Listing</a></li>
-          </ul>
-        </div>
-      </div>
     </div>
 
     <div class="container">
-    <div class="row">
-      <div class="col-md-9">
-            <h2 id="introduction">Introduction</h2>
-        <p>The starting point of this tutorial is the following <a href="http://en.wikipedia.org/wiki/Brainfsck">brainfsck</a> interpreter:</p>
-        <pre class="listing">#include &lt;stdio.h&gt;
+        <div class="row">
+            <div class="col-md-9">
+                <h2 id="introduction">Introduction</h2>
+<p>我们从<a href="http://en.wikipedia.org/wiki/Brainfsck">brainfsck</a> 解释器开始我们的教程:</p>
+<pre class="listing">#include &lt;stdio.h&gt;
 #include &lt;stdlib.h&gt;
 
 #define TAPE_SIZE 30000
@@ -157,137 +159,220 @@ int main(int argc, char** argv)
     fprintf(stderr, "Usage: %s INFILE.bf\n", argv[0]);
     return 1;
   }
-}</pre>
-        <p>Over the course of this tutorial, we'll use DynASM to transform this interpreter
-           into a brainfsck JIT compiler, therein hopefully making it faster.</p>
-        <p>To follow along, clone this repository and start from <code>bf_c.c</code>:</p>
-        <pre><span class="c">git clone https://github.com/corsix/dynasm-doc.git</span>
+}</pre>
+<p>我们在这个教程里, 用 DynASM 将这个 brainfuck 解释器编写成 brainfuck JIT 编译器. 来看看是否会提升运行速度.</p>
+<p>首先, clone 这个 repo, 然后从<code>bf_c.c</code>开始:</p>
+<pre><span class="c">git clone https://github.com/corsix/dynasm-doc.git</span>
 <span class="c">cd dynasm-doc</span>
 <span class="c">git submodule update --init</span>
 <span class="c">cp bf_c.c tutorial.c</span></pre>
-        <p>The functionality of the starting point can be checked by running the following,
-           which should very slowly render the Mandelbrot set:</p>
-        <pre><span class="c">gcc -o tutorial tutorial.c</span>
+<p>我们通过运行这个程序来演示功能, 这个程序会缓慢的渲染曼德博集合(Mandelbrot set):</p>
+<pre><span class="c">gcc -o tutorial tutorial.c</span>
 <span class="c">./tutorial mandelbrot.bf</span></pre>
-      <hr>
-      <h2 id="groundwork">Groundwork</h2>
-        <p>Before the real fun can begin, we need to lay a few pieces of groundwork.</p>
-      <hr>
-      <h3 id="includes">Includes</h3>
-        <p>First of all, we need to <code>#include</code> the DynASM headers:</p>
-        <pre class="diff"><span class="p">#include "luajit-2.0/dynasm/dasm_proto.h"</span>
-<span class="p">#include "luajit-2.0/dynasm/dasm_x86.h"</span></pre>
-        <p>As described in more detail on the reference page, <code><a href="reference.html#dasm_proto_h">dasm_proto.h</a></code>
-           defines the DynASM API, and <code><a href="reference.html#dasm_x86_h">dasm_x86.h</a></code> contains the implementation
-           of said API (for x86 / x64).</p>
-      <hr>
-      <h3 id="types">Types</h3>
-        <p>Next, we'll rename <code>bf_interpret</code> to <code>bf_compile</code> and change
-           its type signature:</p>
-        <pre class="diff"><span class="m">static void bf_interpret(const char* program, bf_state_t* state)</span><span class="p">static void(* bf_compile(const char* program) )(bf_state_t*)</span></pre>
-        <p>Where previously <code>bf_interpret</code> accepted both a <code>const&nbsp;char*</code>
-           and a <code>bf_state_t*</code>, <code>bf_compile</code> now accepts just the
-           <code>const&nbsp;char*</code> portion, and will return a function pointer to the JIT-compiled
-           code.</p>
-        <p>The code which calls <code>bf_interpret</code> also needs updating at this point:</p>
-        <pre class="diff"><span class="m">bf_interpret(program, &amp;state);</span><span class="p">bf_compile(program)(&amp;state);</span></pre>
-      <hr>
-      <h2 id="initialisation">Initialisation</h2>
-        <p>With the groundwork done, the next task is creating and initialising a DynASM state.</p>
-      <hr>
-      <h3 id="variables">Variables</h3>
-        <p>We'll need a variable of type <code>dasm_State*</code> to contain the DynASM state, and
-           two extra variables whose purpose will be explained later. We can also get rid of an
-           interpreter variable at the same time:</p>
-         <pre class="diff"><span class="m">int nskip = 0;</span><span class="p">dasm_State* d;</span>
+
+<p>(译者我的CPU是 Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz, 最高 3.5GHz, 下面是输出结果, 渲染需要35.4s)</p>
+<pre>
+[root@m01 dynasm-doc]# time ./tutorial mandelbrot.bf
+AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDEGFFEEEEDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAAAABBBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDEEEFGIIGFFEEEDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAABBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEFFFI KHGGGHGEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAABBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEFFGHIMTKLZOGFEEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAABBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEEFGGHHIKPPKIHGFFEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBBBB
+AAAAAAAAAABBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGHIJKS  X KHHGFEEEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBB
+AAAAAAAAABBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGQPUVOTY   ZQL[MHFEEEEEEEDDDDDDDCCCCCCCCCCCBBBBBBBBBBBBBB
+AAAAAAAABBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEFFFFFGGHJLZ         UKHGFFEEEEEEEEDDDDDCCCCCCCCCCCCBBBBBBBBBBBB
+AAAAAAABBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEFFFFFFGGGGHIKP           KHHGGFFFFEEEEEEDDDDDCCCCCCCCCCCBBBBBBBBBBB
+AAAAAAABBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEEFGGHIIHHHHHIIIJKMR        VMKJIHHHGFFFFFFGSGEDDDDCCCCCCCCCCCCBBBBBBBBB
+AAAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDEEEEEEFFGHK   MKJIJO  N R  X      YUSR PLV LHHHGGHIOJGFEDDDCCCCCCCCCCCCBBBBBBBB
+AAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDEEEEEEEEEFFFFGH O    TN S                       NKJKR LLQMNHEEDDDCCCCCCCCCCCCBBBBBBB
+AAAAABBCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDEEEEEEEEEEEEFFFFFGHHIN                                 Q     UMWGEEEDDDCCCCCCCCCCCCBBBBBB
+AAAABBCCCCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEFFFFFFGHIJKLOT                                     [JGFFEEEDDCCCCCCCCCCCCCBBBBB
+AAAABCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEEFFFFFFGGHYV RQU                                     QMJHGGFEEEDDDCCCCCCCCCCCCCBBBB
+AAABCCCCCCCCCCCCCCCCCDDDDDDDEEFJIHFFFFFFFFFFFFFFGGGGGGHIJN                                            JHHGFEEDDDDCCCCCCCCCCCCCBBB
+AAABCCCCCCCCCCCDDDDDDDDDDEEEEFFHLKHHGGGGHHMJHGGGGGGHHHIKRR                                           UQ L HFEDDDDCCCCCCCCCCCCCCBB
+AABCCCCCCCCDDDDDDDDDDDEEEEEEFFFHKQMRKNJIJLVS JJKIIIIIIJLR                                               YNHFEDDDDDCCCCCCCCCCCCCBB
+AABCCCCCDDDDDDDDDDDDEEEEEEEFFGGHIJKOU  O O   PR LLJJJKL                                                OIHFFEDDDDDCCCCCCCCCCCCCCB
+AACCCDDDDDDDDDDDDDEEEEEEEEEFGGGHIJMR              RMLMN                                                 NTFEEDDDDDDCCCCCCCCCCCCCB
+AACCDDDDDDDDDDDDEEEEEEEEEFGGGHHKONSZ                QPR                                                NJGFEEDDDDDDCCCCCCCCCCCCCC
+ABCDDDDDDDDDDDEEEEEFFFFFGIPJIIJKMQ                   VX                                                 HFFEEDDDDDDCCCCCCCCCCCCCC
+ACDDDDDDDDDDEFFFFFFFGGGGHIKZOOPPS                                                                      HGFEEEDDDDDDCCCCCCCCCCCCCC
+ADEEEEFFFGHIGGGGGGHHHHIJJLNY                                                                        TJHGFFEEEDDDDDDDCCCCCCCCCCCCC
+A                                                                                                 PLJHGGFFEEEDDDDDDDCCCCCCCCCCCCC
+ADEEEEFFFGHIGGGGGGHHHHIJJLNY                                                                        TJHGFFEEEDDDDDDDCCCCCCCCCCCCC
+ACDDDDDDDDDDEFFFFFFFGGGGHIKZOOPPS                                                                      HGFEEEDDDDDDCCCCCCCCCCCCCC
+ABCDDDDDDDDDDDEEEEEFFFFFGIPJIIJKMQ                   VX                                                 HFFEEDDDDDDCCCCCCCCCCCCCC
+AACCDDDDDDDDDDDDEEEEEEEEEFGGGHHKONSZ                QPR                                                NJGFEEDDDDDDCCCCCCCCCCCCCC
+AACCCDDDDDDDDDDDDDEEEEEEEEEFGGGHIJMR              RMLMN                                                 NTFEEDDDDDDCCCCCCCCCCCCCB
+AABCCCCCDDDDDDDDDDDDEEEEEEEFFGGHIJKOU  O O   PR LLJJJKL                                                OIHFFEDDDDDCCCCCCCCCCCCCCB
+AABCCCCCCCCDDDDDDDDDDDEEEEEEFFFHKQMRKNJIJLVS JJKIIIIIIJLR                                               YNHFEDDDDDCCCCCCCCCCCCCBB
+AAABCCCCCCCCCCCDDDDDDDDDDEEEEFFHLKHHGGGGHHMJHGGGGGGHHHIKRR                                           UQ L HFEDDDDCCCCCCCCCCCCCCBB
+AAABCCCCCCCCCCCCCCCCCDDDDDDDEEFJIHFFFFFFFFFFFFFFGGGGGGHIJN                                            JHHGFEEDDDDCCCCCCCCCCCCCBBB
+AAAABCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEEFFFFFFGGHYV RQU                                     QMJHGGFEEEDDDCCCCCCCCCCCCCBBBB
+AAAABBCCCCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEFFFFFFGHIJKLOT                                     [JGFFEEEDDCCCCCCCCCCCCCBBBBB
+AAAAABBCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDEEEEEEEEEEEEFFFFFGHHIN                                 Q     UMWGEEEDDDCCCCCCCCCCCCBBBBBB
+AAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDEEEEEEEEEFFFFGH O    TN S                       NKJKR LLQMNHEEDDDCCCCCCCCCCCCBBBBBBB
+AAAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDEEEEEEFFGHK   MKJIJO  N R  X      YUSR PLV LHHHGGHIOJGFEDDDCCCCCCCCCCCCBBBBBBBB
+AAAAAAABBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEEFGGHIIHHHHHIIIJKMR        VMKJIHHHGFFFFFFGSGEDDDDCCCCCCCCCCCCBBBBBBBBB
+AAAAAAABBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEFFFFFFGGGGHIKP           KHHGGFFFFEEEEEEDDDDDCCCCCCCCCCCBBBBBBBBBBB
+AAAAAAAABBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEFFFFFGGHJLZ         UKHGFFEEEEEEEEDDDDDCCCCCCCCCCCCBBBBBBBBBBBB
+AAAAAAAAABBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGQPUVOTY   ZQL[MHFEEEEEEEDDDDDDDCCCCCCCCCCCBBBBBBBBBBBBBB
+AAAAAAAAAABBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGHIJKS  X KHHGFEEEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBB
+AAAAAAAAAAABBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEEFGGHHIKPPKIHGFFEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAABBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEFFGHIMTKLZOGFEEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAABBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEFFFI KHGGGHGEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAAAABBBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDEEEFGIIGFFEEEDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBBBBB
+
+real	0m35.466s
+user	0m35.462s
+sys	0m0.002s
+</pre>
+<hr>
+
+
+
+<h2 id="groundwork">Groundwork</h2>
+<p>好戏上演之前, 我们先要做一些基础工作.</p>
+<hr>
+<h3 id="includes">Includes</h3>
+<p>首先, 我们需要 <code>#include</code> DynASM 的头文件:</p>
+<pre class="diff">
+<span class="p">#include "luajit-2.0/dynasm/dasm_proto.h"</span>
+<span class="p">#include "luajit-2.0/dynasm/dasm_x86.h"</span></pre>
+<p>正如参考文档中写的, <code><a href="reference.html#dasm_proto_h">dasm_proto.h</a></code> 定义 DynASM API, <code><a href="reference.html#dasm_x86_h">dasm_x86.h</a></code> 则包含了上述 API 的实现 (x86/ x64).</p>
+<hr>
+<h3 id="types">Types</h3>
+<p>接下来, 我们将 <code>bf_interpret</code> 重命名为 <code>bf_compile</code>, 并更改它的类型定义:</p>
+<pre class="diff">
+<span class="m">static void bf_interpret(const char* program, bf_state_t* state)</span>
+<span class="p">static void(* bf_compile(const char* program) )(bf_state_t*)</span></pre>
+<p>修改前 <code>bf_interpret</code> 可以接受参数 <code>const&nbsp;char*</code> 和 <code>bf_state_t*</code>, 修改后的 <code>bf_compile</code> 只接受参数
+    <code>const&nbsp;char*</code> 部分, 并且返回 JIT 编译后的代码的函数指针.
+</p>
+<p><code>bf_interpret</code> 函数也需要修改:</p>
+<pre class="diff">
+<span class="m">bf_interpret(program, &amp;state);</span>
+<span class="p">bf_compile(program)(&amp;state);</span></pre>
+<hr>
+<h2 id="initialisation">Initialisation</h2>
+<p>搞定基础工作后, 下一步就是创建和初始化一个 DynASM state.</p>
+<hr>
+<h3 id="variables">Variables</h3>
+<p>我们需要一个类型为 <code>dasm_State*</code> 的变量包含 DynASM state, 还需要两个其他的我们一会再解释. 并且还需要移除一个解释器变量:</p>
+<pre class="diff">
+<span class="m">int nskip = 0;</span>
+<span class="p">dasm_State* d;</span>
 <span class="p">unsigned npc = 8;</span>
-<span class="p">unsigned nextpc = 0;</span></pre>
-      <hr>
-      <h3 id="arch">.arch</h3>
-        <p>We now reach the first of many DynASM directives, which are instructions to the DymASM
-           preprocessor. In this case, we need to instruct it as to which architecture we're
-           generating machine code for, which will either be x86 or x64:</p>
-        <pre class="diff"><span class="p">|.if X64</span>
+<span class="p">unsigned nextpc = 0;</span></pre>
+<hr>
+<h3 id="arch">.arch</h3>
+<p>现在我们将第一次接触 DynASM 指令, 这个是 DynASM 预处理器指令. 在这里我们定义生成目标机器码的平台架构, x86 或 x64:</p>
+<pre class="diff">
+<span class="p">|.if X64</span>
 <span class="p">|.arch x64</span>
 <span class="p">|.else</span>
 <span class="p">|.arch x86</span>
-<span class="p">|.endif</span></pre>
-        <p>Lines starting with a vertical bar will be picked up by the DynASM preprocessor. The
-           <code><a href="reference.html#_if">.if</a></code>, <code><a href="reference.html#_else">.else</a></code>, and <code><a href="reference.html#_endif">.endif</a></code> directives will be handled
-           by DynASM's prepreprocessor, with semantics similar to C's preprocessor <code>#if</code>,
-           <code>#else</code>, and <code>#endif</code>. As a result, exactly one <code><a href="reference.html#_arch">.arch</a></code>
-           directive will take effect.</p>
-      <hr>
-      <h3 id="dasm_init">dasm_init</h3>
-        <p>Having declared a variable of type <code>dasm_State*</code>, we need to actually
-           allocate a <code>dasm_State</code> to put in it, which is done by calling <code><a href="reference.html#dasm_init">dasm_init</a></code>:</p>
-        <pre class="diff"><span class="p">|.section code</span>
-<span class="p">dasm_init(&amp;d, DASM_MAXSECTION);</span></pre>
-        <p>Note that as well as a <code>dasm_State**</code>, <code><a href="reference.html#dasm_init">dasm_init</a></code> also requires
-           an integer argument, which specifies the number of sections of machine code that'll be
-           generated. We only need one code section, so we invoke the <code><a href="reference.html#_section">.section</a></code> directive
-           with one argument, which the DynASM preprocessor will rewrite to <code>#define&nbsp;DASM_MAXSECTION&nbsp;1</code>
-           (amongst other things). This is a slightly convoluted way of passing <code>1</code> as the
-           second argument to <code><a href="reference.html#dasm_init">dasm_init</a></code>, but is a good habit in case we need more sections
-           in the future.</p>
-      <hr>
-      <h3 id="dasm_setupglobal">dasm_setupglobal</h3>
-        <p><code><a href="reference.html#dasm_init">dasm_init</a></code> will have allocated a <code>dasm_State</code>, but won't have fully
-           initialised it. A few more calls are required to fully initialise the state, the first of
-           which is <code><a href="reference.html#dasm_setupglobal">dasm_setupglobal</a></code>:</p>
-        <pre class="diff"><span class="p">|.globals lbl_</span>
+<span class="p">|.endif</span></pre>
+<p>开头的竖线会被 DynASM 预处理器识别.
+    <code><a href="reference.html#_if">.if</a></code>, <code><a href="reference.html#_else">.else</a></code>, 和 <code><a href="reference.html#_endif">.endif</a></code> 指令会被 DynASM 的预处理器处理, 处理方式与 C 语言预处理中的 <code>#if</code>,
+    <code>#else</code>, 和 <code>#endif</code>. 相似, 执行结果就是只有一个 <code><a href="reference.html#_arch">.arch</a></code> 指令会生效.</p>
+<hr>
+<h3 id="dasm_init">dasm_init</h3>
+<p>我们定义了 <code>dasm_State*</code>, 现在我们要分配内存空间把它装进去. 调用 <code><a href="reference.html#dasm_init">dasm_init</a></code>即可:</p>
+<pre class="diff">
+<span class="p">|.section code</span>
+<span class="p">dasm_init(&amp;d, DASM_MAXSECTION);</span></pre>
+<p>注意跟 <code>dasm_State**</code> 一样, <code><a href="reference.html#dasm_init">dasm_init</a></code> 需要一个 integer 参数, 定义生成的机器码的 section. 我们只需要一个 code section, 所以我们传入一个参数给 <code><a href="reference.html#_section">.section</a></code> , 这样 DynASM 预处理器就会处理成 <code>#define&nbsp;DASM_MAXSECTION&nbsp;1</code> (amongst other things). 也许给 <code><a href="reference.html#dasm_init">dasm_init</a></code>    传 <code>DASM_MAXSECTION</code> 没有直接传 <code>1</code> 那么直观, 但是这是个好的实践, 因为说不定将来我们就会需要更多的 section.
+</p>
+<hr>
+<h3 id="dasm_setupglobal">dasm_setupglobal</h3>
+<p><code><a href="reference.html#dasm_init">dasm_init</a></code> 将会分配 <code>dasm_State</code>, 但这并不是完全的初始化. 想要初始化 state 我们还需要调用几个函数. 第一个就是 <code><a href="reference.html#dasm_setupglobal">dasm_setupglobal</a></code>:</p>
+<pre class="diff">
+<span class="p">|.globals lbl_</span>
 <span class="p">void* labels[lbl__MAX];</span>
-<span class="p">dasm_setupglobal(&amp;d, labels, lbl__MAX);</span></pre>
-        <p>The <code><a href="reference.html#_globals">.globals</a></code> directive with the argument <code>lbl_</code> will be rewritten by the
-           DynASM preprocessor to become an <code>enum</code> containing several things, one of which will
-           be <code>lbl__MAX</code>. This value must be passed to <code><a href="reference.html#dasm_setupglobal">dasm_setupglobal</a></code>, along with
-           an array of <code>void*</code> of equal extent. We'll make use of this <code>labels</code> array
-           much later.</p>
-      <hr>
-      <h3 id="dasm_setup">dasm_setup</h3>
-        <p>The next call in the initialisation sequence is to <code><a href="reference.html#dasm_setup">dasm_setup</a></code>:</p>
-        <pre class="diff"><span class="p">|.actionlist bf_actions</span>
-<span class="p">dasm_setup(&amp;d, bf_actions);</span></pre>
-        <p>The <code><a href="reference.html#_actionlist">.actionlist</a></code> directive with the argument <code>bf_actions</code> will be rewritten
-           by the DynASM preprocessor to become a variable called <code>bf_actions</code>, and this variable
-           must be passed to <code><a href="reference.html#dasm_setup">dasm_setup</a></code>.</p>
-      <hr>
-      <h3 id="dasm_growpc">dasm_growpc</h3>
-        <p>For a lot of use cases, the <code>dasm_State</code> would be fully initialised at this point.
-           However, as we'll be making use of dynamic labels, there is one more initialisation call to
-           make, which is to <code><a href="reference.html#dasm_growpc">dasm_growpc</a></code>:</p>
-        <pre class="diff"><span class="p">dasm_growpc(&amp;d, npc);</span></pre>
-        <p>We're passing <code>npc</code> as an argument, which is a variable we declared earlier. Said
-           variable represents the number of dynamic labels we've allocated, while the related variable
-           <code>nextpc</code> represents the number of dynamic labels we've used. These dynamic labels
-           will come into play when compiling <code>[</code> and <code>]</code>.</p>
-      <hr>
-      <h2 id="abstractions">Abstractions</h2>
-        <p>Before we start emitting machine code, it is useful to define a few abstractions. The first
-           few abstractions are to give slightly more meaningful names to the registers we'll be using:</p>
-        <table class="table table-striped">
-        <thead><tr><th>Abstraction</th><th>Corresponding Interpreter Variable</th><th>Definition</th></tr></thead>
-        <tbody>
-          <tr><td><code>aState</code></td><td><code>state</code></td><td><code>ebx</code> or <code>rbx</code></td></tr>
-          <tr><td><code>aPtr</code></td><td><code>ptr</code></td><td><code>ebp</code> or <code>r12</code></td></tr>
-          <tr><td><code>aTapeBegin</code></td><td><code>tape_begin</code></td><td><code>esi</code> or <code>rsi</code> or <code>r13</code></td></tr>
-          <tr><td><code>aTapeEnd</code></td><td><code>tape_end</code></td><td><code>edi</code> or <code>rdi</code> or <code>r14</code></td></tr>
-        </tbody>
-        </table>
-        <p>The next group of useful abstractions relate to function calls:</p>
-        <table class="table table-striped">
-        <thead><tr><th>Abstraction</th><th>Description</th></tr></thead>
-        <tbody>
-          <tr><td><code>prologue</code></td><td>Set up the stack frame, and set <code>aState</code> from the passed parameter.</td></tr>
-          <tr><td><code>prepcall1 arg1</code></td><td>Prepare to call a function with one argument, <code>arg1</code>.</td></tr>
-          <tr><td><code>prepcall2 arg1, arg2</code></td><td>Prepare to call a function with two arguments, <code>arg1</code> and <code>arg2</code>.</td></tr>
-          <tr><td><code>postcall n</code></td><td>Do cleanup after a call to a function with <code>n</code> arguments.</td></tr>
-          <tr><td><code>epilogue</code></td><td>Tear down the stack frame.</td></tr>
-        </tbody>
-        </table>
-        <p>All of these abstractions are defined by means of <code><a href="reference.html#_define">.define</a></code> (for simple substitutions) or <code><a href="reference.html#_macro">.macro</a></code> (for more
-           complex constructions), and have different definitions for each of x86, x64 POSIX, and x64 Windows:</p>
-        <pre class="diff"><span class="p">|.if X64</span>
+<span class="p">dasm_setupglobal(&amp;d, labels, lbl__MAX);</span></pre>
+<p>带者参数 <code>lbl_</code> 的 <code><a href="reference.html#_globals">.globals</a></code> 指令会被 DynASM 预处理为一个包含一些结构的 <code>enum</code> 类型, 其中一个是 <code>lbl__MAX</code>. 这个值必须与相同长度的 <code>void*</code> 数组传入到 <code><a href="reference.html#dasm_setupglobal">dasm_setupglobal</a></code>, 后续我们将使用 <code>labels</code> 数组.</p>
+<hr>
+<h3 id="dasm_setup">dasm_setup</h3>
+<p>接下来在初始化过程调用的是 <code><a href="reference.html#dasm_setup">dasm_setup</a></code>:</p>
+<pre class="diff">
+<span class="p">|.actionlist bf_actions</span>
+<span class="p">dasm_setup(&amp;d, bf_actions);</span></pre>
+<p>带 <code>bf_actions</code> 参数的 <code><a href="reference.html#_actionlist">.actionlist</a></code> 指令会被 DynASM 预处理器重写为 <code>bf_actions</code> 变量, 并且需要传入到 <code><a href="reference.html#dasm_setup">dasm_setup</a></code>.</p>
+<hr>
+<h3 id="dasm_growpc">dasm_growpc</h3>
+<p>正常情况下 <code>dasm_State</code> 在这个节点已经完全初始化. 不过由于我们还要用动态 labels, 所以还要调用 <code><a href="reference.html#dasm_growpc">dasm_growpc</a></code> 再初始化一下:</p>
+<pre class="diff">
+<span class="p">dasm_growpc(&amp;d, npc);</span></pre>
+<p>我们传入了之前定义的 <code>npc</code> 参数, 这个参数代表动态 lable 的数量. 还有个依赖的变量叫
+    <code>nextpc</code> 是用来记录我们使用的 lable 的数量的. 这些动态 lable 将在我们编译 <code>[</code> 和 <code>]</code> 时起作用.</p>
+<hr>
+<h2 id="abstractions">Abstractions</h2>
+<p>在我们执行机器码之前, 先定义一些抽象(abstraction), 先定义一些让寄存器更具有意义的抽象概念:</p>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Abstraction</th>
+            <th>Corresponding Interpreter Variable</th>
+            <th>Definition</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>aState</code></td>
+            <td><code>state</code></td>
+            <td><code>ebx</code> or <code>rbx</code></td>
+        </tr>
+        <tr>
+            <td><code>aPtr</code></td>
+            <td><code>ptr</code></td>
+            <td><code>ebp</code> or <code>r12</code></td>
+        </tr>
+        <tr>
+            <td><code>aTapeBegin</code></td>
+            <td><code>tape_begin</code></td>
+            <td><code>esi</code> or <code>rsi</code> or <code>r13</code></td>
+        </tr>
+        <tr>
+            <td><code>aTapeEnd</code></td>
+            <td><code>tape_end</code></td>
+            <td><code>edi</code> or <code>rdi</code> or <code>r14</code></td>
+        </tr>
+    </tbody>
+</table>
+<p>接下来再定义一些函数调用:</p>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Abstraction</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>prologue</code></td>
+            <td>Set up the stack frame, and set <code>aState</code> from the passed parameter.</td>
+        </tr>
+        <tr>
+            <td><code>prepcall1 arg1</code></td>
+            <td>Prepare to call a function with one argument, <code>arg1</code>.</td>
+        </tr>
+        <tr>
+            <td><code>prepcall2 arg1, arg2</code></td>
+            <td>Prepare to call a function with two arguments, <code>arg1</code> and <code>arg2</code>.</td>
+        </tr>
+        <tr>
+            <td><code>postcall n</code></td>
+            <td>Do cleanup after a call to a function with <code>n</code> arguments.</td>
+        </tr>
+        <tr>
+            <td><code>epilogue</code></td>
+            <td>Tear down the stack frame.</td>
+        </tr>
+    </tbody>
+</table>
+<p>这些定义都是通过 <code><a href="reference.html#_define">.define</a></code> (通常情况下) 或 <code><a href="reference.html#_macro">.macro</a></code> (更复杂情况下), 并且 x86, x64 POSIX, x64 Windows 下的定义也有所不同:</p>
+<pre class="diff">
+<span class="p">|.if X64</span>
 <span class="p">  |.define aPtr, rbx</span>
 <span class="p">  |.define aState, r12</span>
 <span class="p">  |.if WIN</span>
@@ -354,27 +439,25 @@ int main(int argc, char** argv)
 <span class="p">    | pop aPtr</span>
 <span class="p">    | ret 4</span>
 <span class="p">  |.endmacro</span>
-<span class="p">|.endif</span></pre>
-        <p>Having made all of these architecture and operating system dependent definitions for the DynASM preprocessor, it
-           is useful to check that the architecture and operating system specified to the DynASM preprocessor match the architecture
-           and operating system as known by the C preprocessor, which is done by the following:</p>
-        <pre class="diff"><span class="p">||#if ((defined(_M_X64) || defined(__amd64__)) != X64) || (defined(_WIN32) != WIN)</span>
+<span class="p">|.endif</span></pre>
+<p>为 DynASM 定义了所有这些体系结构和系统有关的定义之后, 还需要检查这些为 DynASM 指定的体系结构和系统是否与 C 预处理器已知的这些是否相匹配:</p>
+<pre class="diff">
+<span class="p">||#if ((defined(_M_X64) || defined(__amd64__)) != X64) || (defined(_WIN32) != WIN)</span>
 <span class="p">#error "Wrong DynASM flags used: pass `-D X64` and/or `-D WIN` to dynasm.lua as appropriate"</span>
-<span class="p">#endif</span></pre>
-        <p>Note the line starting with two vertical bars: such lines undergo <code><a href="reference.html#_define">.define</a></code> substitution by the DynASM
-           prepreprocessor (and can particicpate in <code><a href="reference.html#_macro">.macro</a></code> definitions), but are otherwise unchanged by the DynASM
-           preprocessor. In particular, if <code>X64</code> and/or <code>WIN</code> are defined (to <code>1</code>) at DynASM prepreprocessing time,
-           then they'll be substituted for <code>1</code>. If they're not defined at DynASM prepreprocessing time, they'll be
-           left unchanged, and be substituated for <code>0</code> by the C preprocessor.</p>
-      <hr>
-      <h2 id="emitting">Emitting Code</h2>
-        <p>With all of that done, we're finally ready to emit some machine code.</p>
-      <hr>
-      <h3 id="prologue">Prologue</h3>
-        <p>The first thing we need to emit is a prologue, which replaces some of the initialisation previously done by the interpreter:</p>
-        <pre class="diff"><span class="m">unsigned char* tape_begin = state-&gt;tape - 1;</span>
+<span class="p">#endif</span></pre>
+<p>这些以两条竖线开头的将由 DynASM 预处理器替换为 <code><a href="reference.html#_define">.define</a></code> (同样如果有的话也可以替换为 <code><a href="reference.html#_macro">.macro</a></code>), 但其他的不会被 DynASM 预处理器更改. 在特定情况下, 如果 <code>X64</code> 和/或 <code>WIN</code> 在 DynASM 预处理时被定义 (这里为 <code>1</code>) 那么就会被替换成 <code>1</code>.如果在 DynASM 预处理时没有被定义, 那就会保持原样,
+    并由 C 预处理器替换为 <code>0</code> .</p>
+<hr>
+<h2 id="emitting">Emitting Code</h2>
+<p>完成所有这些操作之后，我们终于可以执行一些机器码了.</p>
+<hr>
+<h3 id="prologue">Prologue</h3>
+<p>我们首先要执行的是一些初始化代码, 这些代码替换了一部分之前的解释器的代码:</p>
+<pre class="diff">
+<span class="m">unsigned char* tape_begin = state-&gt;tape - 1;</span>
 <span class="m">unsigned char* ptr = state-&gt;tape;</span>
-<span class="m">unsigned char* tape_end = state-&gt;tape + TAPE_SIZE - 1;</span><span class="p">|.type state, bf_state_t, aState</span>
+<span class="m">unsigned char* tape_end = state-&gt;tape + TAPE_SIZE - 1;</span>
+<span class="p">|.type state, bf_state_t, aState</span>
 
 <span class="p">dasm_State** Dst = &amp;d;</span>
 <span class="p">|.code</span>
@@ -382,95 +465,86 @@ int main(int argc, char** argv)
 <span class="p">| prologue</span>
 <span class="p">| mov aPtr, state-&gt;tape</span>
 <span class="p">| lea aTapeBegin, [aPtr-1]</span>
-<span class="p">| lea aTapeEnd, [aPtr+TAPE_SIZE-1]</span></pre>
-        <p>The first item of interest here is the <code><a href="reference.html#_type">.type</a></code> directive, which subsequently allows us to write <code>state-&gt;tape</code>
-           as a shorthand for <code>[aState + offsetof(bf_state_t,tape)]</code>.</p>
-        <p>The next line defines a variable called <code>Dst</code>, and initialises it to <code>&amp;d</code>. This is done because the
-           DynASM preprocessor will rewrite the subsequent lines to calls of the form <code>dasm_put(Dst, ...)</code>, and like the
-           previous calls we've made to <code>dasm_</code> functions, the first argument wants to be <code>&amp;d</code>.</p>
-        <p>The next line contains a <code class="nolink">.code</code> directive. Said directive was introduced by the prior <code>.section code</code>
-           directive, and states that subsequently emitted machine code should be placed in the <code>code</code> section (which happens
-           to be the one and only section we're working with).</p>
-        <p>After this, we define the global label <code>-&gt;bf_main</code>. After we've finished emitting machine code, we'll
-           obtain the address of this global label and turn it into a function pointer.</p>
-        <p>We then invoke the <code>prologue</code> macro as defined earlier, which will cause a few instructions to be emitted.</p>
-        <p>Finally, we have a <code>mov</code> instruction and two <code>lea</code> instructions, which directly correspond to the
-           removed interpreter code. As mentioned, the <code>state-&gt;tape</code> specified as an operand to <code>mov</code> is
-           recognised as shorthand for <code>[aState + offsetof(bf_state_t,tape)]</code>. Note that both <code>offsetof(bf_state_t,tape)</code>
-           and <code>TAPE_SIZE-1</code> (part of the <code>lea</code> operand) are so-called encoding-time constants: DynASM doesn't
-           understand what they mean, so it defers their computation to the C compiler. Both of these values happen to be compile-time
-           constants in C, but encoding-time constants don't have to be compile-time constants (we'll see examples of this in just a minute).</p>
-      <hr>
-      <h3 id="tape-movement">Tape Movement</h3>
-        <p>We've reached the guts of the interpreter now, and the first job is to replace the interpreter's handling of <code>&lt;</code> with
-           the compiler's interpretation:</p>
-        <pre class="diff"><span class="m">if(!nskip) {</span>
+<span class="p">| lea aTapeEnd, [aPtr+TAPE_SIZE-1]</span></pre>
+<p>我们首先看 <code><a href="reference.html#_type">.type</a></code> 指令, 这个指令可以让我们用 <code>state-&gt;tape</code> 作为速记符来表达 <code>[aState + offsetof(bf_state_t,tape)]</code>.</p>
+<p>接下来这一行定义了 <code>Dst</code>, 并且用 <code>&amp;d</code> 初始化. 这样做是因为DynASM预处理器将把后续行重写为 <code>dasm_put(Dst, ...)</code>形式的调用, 并且跟我们之前处理那些 <code>dasm_</code> 函数一样, 第一个参数需要是 <code>&amp;d</code>.</p>
+<p>接下来是包含 <code class="nolink">.code</code> 这一行. 这里指代的指令由先前的 <code>.section code</code> 指令引入, 并且执行的 states 需要放到 <code>code</code> section (这也正好是我们在处理的部分).
+</p>
+<p>再之后我们定义了 <code>-&gt;bf_main</code>. 当我们执行完机器码后, 就可以获取这个 global lable 的地址, 并且转换为函数指针.</p>
+<p>然后, 我们调用前面定义的 <code>prologue</code> 宏, 执行那些指令.</p>
+<p>最后这几行是 <code>mov</code> 和 <code>lea</code> 指令, 对应删掉的那几行解释器的代码. 像刚才说的那样, <code>state-&gt;tape</code> 变成操作数 <code>mov</code> 最终执行的是 <code>[aState + offsetof(bf_state_t,tape)]</code>. 注意 <code>offsetof(bf_state_t,tape)</code> 和 <code>TAPE_SIZE-1</code> (<code>lea</code>    操作数的一部分) 是所谓的编码时常量: DynASM 并不知道这是什么, 所以到 C 编译器中才会计算. 这两个值都是 C 语言中的编译时常量, 编码时常量不必是编译时常量 (稍后有例子解释).</p>
+<hr>
+<h3 id="tape-movement">Tape Movement</h3>
+<p>现在进入解释器阶段, 首要任务是将解释 <code>&lt;</code> 部分的代码替换掉:</p>
+<pre class="diff">
+<span class="m">if(!nskip) {</span>
 <span class="m">  ptr -= n;</span>
 <span class="m">  while(ptr &lt;= tape_begin)</span>
 <span class="m">    ptr += TAPE_SIZE;</span>
-<span class="m">}</span><span class="p">| sub aPtr, n%TAPE_SIZE</span>
+<span class="m">}</span>
+<span class="p">| sub aPtr, n%TAPE_SIZE</span>
 <span class="p">| cmp aPtr, aTapeBegin</span>
 <span class="p">| ja &gt;1</span>
 <span class="p">| add aPtr, TAPE_SIZE</span>
-<span class="p">|1:</span></pre>
-        <p>Note that the compiler doesn't have a notion of skipping over code like the interpreter does, so the outer <code>if</code> is
-           dropped entirely. After that, <code>ptr -= n;</code> and some iterations of the subsequent loop have become <code>| sub aPtr, n%TAPE_SIZE</code>.
-           Note that <code>n%TAPE_SIZE</code> is an encoding-time constant which isn't a compile-time constant in C: DynASM still doesn't
-           understand what the operand means, but in this case the final value of the operand is computed when <code>bf_compile</code> is running.</p>
-        <p>After performing some iterations of the loop at compile time by means of <code>%TAPE_SIZE</code>, there might still be one iteration
-           to perform at runtime, which correspond to the <code>cmp</code>, <code>ja</code>, and <code>add</code> instructions. Note that
-           the syntax <code>&gt;1</code> jumps forward to the next definition of the local label <code>1</code>, which is just after the <code>add</code>
-           instruction.</p>
-        <p>A similar transformation happens for <code>&gt;</code>, but with <code>add</code> and <code>sub</code> transposed:</p>
-        <pre class="diff"><span class="m">if(!nskip) {</span>
+<span class="p">|1:</span></pre>
+<p>注意，编译器没有像解释器那样跳过代码的概念, 所以把上面的 <code>if</code> 部分完全删除了. <code>ptr -= n;</code> 和下面的循环都变成了 <code>| sub aPtr, n%TAPE_SIZE</code>. Note that <code>n%TAPE_SIZE</code> 则是一个 编码阶段常量, 不是一个C编译阶段常量:DynASM 也不理解操作数的意义. 但是在这种情况下，当 <code>bf_compile</code> 最终运行时会计算操作数的最终值.</p>
+<p>编译时当循环过 <code>%TAPE_SIZE</code>, 定义的周期后, 在运行时可能仍然需要执行一次迭代, 这是因为还有 <code>cmp</code>, <code>ja</code>, 和 <code>add</code> 指令. 注意语句 <code>&gt;1</code> 跳转到定义 lable <code>1</code> 的位置, 即 <code>add</code> 的下一行.
+</p>
+<p><code>&gt;</code> 操作符也一样, 只不过是 <code>add</code> 和 <code>sub</code> 这部分倒过来:</p>
+<pre class="diff">
+<span class="m">if(!nskip) {</span>
 <span class="m">  ptr += n;</span>
 <span class="m">  while(ptr &gt; tape_end)</span>
 <span class="m">    ptr -= TAPE_SIZE;</span>
-<span class="m">}</span><span class="p">| add aPtr, n%TAPE_SIZE</span>
+<span class="m">}</span>
+<span class="p">| add aPtr, n%TAPE_SIZE</span>
 <span class="p">| cmp aPtr, aTapeEnd</span>
 <span class="p">| jbe &gt;1</span>
 <span class="p">| sub aPtr, TAPE_SIZE</span>
-<span class="p">|1:</span></pre>
-      <hr>
-      <h3 id="arithmetic">Arithmetic</h3>
-        <p>The next instruction to be rewritten is <code>+</code>, which is relatively simple:</p>
-        <pre class="diff"><span class="m">if(!nskip)</span>
-<span class="m">  *ptr += n;</span><span class="p">| add byte [aPtr], n</span></pre>
-        <p>The only notable thing is the presence of the memory size specifier <code>byte</code> before the memory operand <code>[aPtr]</code>. As neither
-           the memory operand nor the immediate operand have a natural operand size, DynASM needs to be explicitly told. Note that our prior uses of
-           memory operands didn't require memory size specifiers: <code>lea</code> instructions don't require them because the memory operands aren't memory
-           accesses, and <code>mov aPtr, state-&gt;tape</code> didn't require one because the size of the memory operand was inferred to be equal to size of
-           the register operand.</p>
-        <p>The handling of <code>-</code> is similar:</p>
-        <pre class="diff"><span class="m">if(!nskip)</span>
-<span class="m">  *ptr -= n;</span><span class="p">| sub byte [aPtr], n</span></pre>
-      <hr>
-      <h3 id="io">I/O</h3>
-        <p>The next job involves the logic for <code>,</code> (read char) and <code>.</code> (write char), which are notable because they involve
-           calling other functions. The first of these is <code>,</code>:</p>
-        <pre class="diff"><span class="m">if(!nskip)</span>
-<span class="m">  *ptr = state-&gt;get_ch(state);</span><span class="p">| prepcall1 aState</span>
+<span class="p">|1:</span></pre>
+<hr>
+<h3 id="arithmetic">Arithmetic</h3>
+<p>接下来要改写的指令是 <code>+</code>, 相对简单:</p>
+<pre class="diff">
+<span class="m">if(!nskip)</span>
+<span class="m">  *ptr += n;</span>
+<span class="p">| add byte [aPtr], n</span></pre>
+<p>值得注意的只有内存操作符 <code>[aPtr]</code> 前面的内存大小描述符 <code>byte</code>. 因为内存操作数和立即操作数都不具有真实的操作数大小, 所以需要明确告知 DynASM. 请注意，我们先前使用的内存操作数不需要内存大小说明符: <code>lea</code> 指令并不需要, 内存操作数并不是内存访问. 并且 <code>mov aPtr, state-&gt;tape</code> 也不需要, 因为可以根据寄存器操作数的大小推断出内存操作数的大小. 他们是相等的.</p>
+<p><code>-</code> 指令也一样:</p>
+<pre class="diff">
+<span class="m">if(!nskip)</span>
+<span class="m">  *ptr -= n;</span>
+<span class="p">| sub byte [aPtr], n</span></pre>
+<hr>
+
+<h3 id="io">I/O</h3>
+<p>接下来是 <code>,</code> (read char) 和 <code>.</code> (write char), 值得注意的是它们需要调用其他函数. 首先是 <code>,</code>:</p>
+<pre class="diff">
+<span class="m">if(!nskip)</span>
+<span class="m">  *ptr = state-&gt;get_ch(state);</span>
+<span class="p">| prepcall1 aState</span>
 <span class="p">| call aword state-&gt;get_ch</span>
 <span class="p">| postcall 1</span>
-<span class="p">| mov byte [aPtr], al</span></pre>
-        <p>Note the invocations of the <code>prepcall1</code> and <code>postcall</code> abstractions that we defined earlier. Also note that
-           <code>state-&gt;get_ch</code> is shorthand for <code>[aState + offsetof(bf_state_t,get_ch)]</code> courtesy of the earlier <code><a href="reference.html#_type">.type</a></code>
-           directive, and that memory size specifiers are still required when these shorthands are used: the size of the memory operand will
-           not be automatically inferred to be equal to the size of the named C structure member. The <code>aword</code> (address-sized word)
-           specifier refers to either 4 bytes <span class="badge">x86</span> or 8 bytes <span class="badge">x64</span>.</p>
-        <p>The transformation of <code>.</code> is similar:</p>
-        <pre class="diff"><span class="m">if(!nskip)</span>
-<span class="m">  state-&gt;put_ch(state, *ptr);</span><span class="p">| movzx r0, byte [aPtr]</span>
+<span class="p">| mov byte [aPtr], al</span></pre>
+<p>注意调用的抽象定义 <code>prepcall1</code> 和 <code>postcall</code> 我们之前定义过了. 同时也要注意
+    <code>state-&gt;get_ch</code> 是 <code>[aState + offsetof(bf_state_t,get_ch)]</code> 的速记表述, 之前介绍 <code><a href="reference.html#_type">.type</a></code> 的时候我们说过了. 并且使用这些速记符号的时候仍然需要内存大小说明符. 内存操作数的大小不会自动推断为同等大小的 C 语言同名结构体成员. <code>aword</code> (address-sized word) 说明符指的是 4 字节 <span class="badge">x86</span>    或 8 字节 <span class="badge">x64</span>.</p>
+<p><code>.</code> 的转换也一样:</p>
+<pre class="diff">
+<span class="m">if(!nskip)</span>
+<span class="m">  state-&gt;put_ch(state, *ptr);</span>
+<span class="p">| movzx r0, byte [aPtr]</span>
 <span class="p">| prepcall2 aState, r0</span>
 <span class="p">| call aword state-&gt;put_ch</span>
-<span class="p">| postcall 2</span></pre>
-        <p>Note that <code>r0</code> is used as a register operand: it refers to either <code>eax</code> <span class="badge">x86</span> or <code>rax</code> <span class="badge">x64</span>.</p>
-      <hr>
-      <h3 id="loops">Loops</h3>
-        <p>We now reach the really interesting instructions: <code>[</code> and <code>]</code>. The first of these has a rather complex transformation:</p>
-        <pre class="diff"><span class="m">loops[nloops++] = program;</span>
+<span class="p">| postcall 2</span></pre>
+<p>注意 <code>r0</code> 用作寄存器操作数: 指的是 <code>eax</code> <span class="badge">x86</span> 或 <code>rax</code> <span class="badge">x64</span>.</p>
+<hr>
+<h3 id="loops">Loops</h3>
+<p>现在轮到了最有趣的指令: <code>[</code> 和 <code>]</code>. 其中 <code>[</code> 相当复杂:</p>
+<pre class="diff">
+<span class="m">loops[nloops++] = program;</span>
 <span class="m">if(!*ptr)</span>
-<span class="m">  ++nskip;</span><span class="p">if(program[0] == '-' &amp;&amp; program[1] == ']') {</span>
+<span class="m">  ++nskip;</span>
+<span class="p">if(program[0] == '-' &amp;&amp; program[1] == ']') {</span>
 <span class="p">  program += 2;</span>
 <span class="p">  | xor eax, eax</span>
 <span class="p">  | mov byte [aPtr], al</span>
@@ -484,39 +558,36 @@ int main(int argc, char** argv)
 <span class="p">  |=&gt;nextpc:</span>
 <span class="p">  loops[nloops++] = nextpc;</span>
 <span class="p">  nextpc += 2;</span>
-<span class="p">}</span></pre>
-        <p>First of all, we now recognise the instruction sequence <code>[-]</code> and emit optimised machine code for it. Having excluded this specific case, the
-           general case requires two dynamic labels: one for jumping from <code>[</code> to after <code>]</code> (previously done by means of the <code>nskip</code>
-           variable in the interpreter), and one for jumping from <code>]</code> to after <code>[</code> (previously done by means of the <code>loops</code> stack).</p>
-        <p>If the number of dynamic labels we've used equals the number we've allocated, then we call <code><a href="reference.html#dasm_growpc">dasm_growpc</a></code> in order to allocate some more. We then
-           emit a <code>cmp</code> instruction, which does the obvious thing. If the byte at <code>[aPtr]</code> was zero, we jump to the dynamic label <code>=&gt;nextpc+1</code>
-           (which we'll subsequently define when we see <code>]</code>). After this, we define the dynamic label <code>=&gt;nextpc</code> (which is what <code>]</code> will
-           jump back to). Note that both <code>nextpc+1</code> and <code>nextpc</code> are encoding-time constants.</p>
-        <p>The second half of the magic comes from the handling of <code>]</code>:</p>
-        <pre class="diff"><span class="m">if(*ptr)</span>
+<span class="p">}</span></pre>
+<p>首先, 我们识别指令 <code>[-]</code> 并为其生成优化后的机器码. 但要排除特殊情况, 一般情况下需要两个动态标签: 一个需要从 <code>[</code> 跳到 <code>]</code> 的后面 (之前是通过解释器中的 <code>nskip</code> 实现的), 另一个是从 <code>]</code> 跳到 <code>[</code> 的后面 (之前是通过 <code>loops</code> 的栈实现的).</p>
+<p>如果我们已经用了我们分配的数量的动态 lable, 还可以调用 <code><a href="reference.html#dasm_growpc">dasm_growpc</a></code> 继续分配.然后我们发出 <code>cmp</code> 指令, 它的作用正如其字面意义. 如果 <code>[aPtr]</code> 中的 byte 是 0, 我们跳到动态 <code>=&gt;nextpc+1</code> (我们在稍后的 <code>]</code> 操作符的逻辑中定义). 然后, 我们定义动态 label <code>=&gt;nextpc</code> (<code>]</code>    需要跳回的地方). 注意 <code>nextpc+1</code> 和 <code>nextpc</code> 是编码时常量.</p>
+<p>然后是 <code>]</code>:</p>
+<pre class="diff">
+<span class="m">if(*ptr)</span>
 <span class="m">  program = loops[nloops-1];</span>
 <span class="m">else</span>
 <span class="m">  --nloops;</span>
 <span class="m">if(nskip)</span>
-<span class="m">  --nskip;</span><span class="p">--nloops;</span>
+<span class="m">  --nskip;</span>
+<span class="p">--nloops;</span>
 <span class="p">| cmp byte [aPtr], 0</span>
 <span class="p">| jnz =&gt;loops[nloops]</span>
-<span class="p">|=&gt;loops[nloops]+1:</span></pre>
-        <p>Note the conditional jump to the dynamic label <code>=&gt;loops[nloops]</code> (which jumps to the <code>=&gt;nextpc</code> defined by the corresponding <code>[</code>),
-           and the definition of the dynamic label <code>=&gt;loops[nloops]+1</code> (which is jumped to by <code>jz =&gt;nextpc+1</code> emitted by the corresponding <code>[</code>).</p>
-      <hr>
-      <h3 id="epilogue">Epilogue</h3>
-        <p>Having covered all of the instructions, all that is left is handling the epilogue and extracting a function pointer from DynASM:</p>
-        <pre class="diff"><span class="m">return;</span><span class="p">| epilogue</span>
+<span class="p">|=&gt;loops[nloops]+1:</span></pre>
+<p>注意条件跳转到动态 label <code>=&gt;loops[nloops]</code> (相应的在 <code>[</code> 的定义是跳转到 <code>=&gt;nextpc</code>), 然后动态 label <code>=&gt;loops[nloops]+1</code> (相应的在 <code>[</code> 中的定义是跳转到 <code>jz =&gt;nextpc+1</code>).</p>
+<hr>
+<h3 id="epilogue">Epilogue</h3>
+<p>涵盖了所有指令之后，剩下的就是收尾并从 DynASM 中提取函数指针:</p>
+<pre class="diff">
+<span class="m">return;</span>
+<span class="p">| epilogue</span>
 <span class="p">link_and_encode(&amp;d);</span>
 <span class="p">dasm_free(&amp;d);</span>
-<span class="p">return (void(*)(bf_state_t*))labels[lbl_bf_main];</span></pre>
-        <p>The first of these lines invokes the <code>epilogue</code> macro we defined earlier. The next line calls out to <code>link_and_encode</code>, which
-           is a function we'll define in just a minute. We then call <code><a href="reference.html#dasm_free">dasm_free</a></code>, which frees the DynASM state. Finally, we take the <code>labels</code>
-           array we previously defined and passed to <code><a href="reference.html#dasm_setupglobal">dasm_setupglobal</a></code>, index it with <code>lbl_bf_main</code> (which was defined by <code>.globals lbl_</code> and corresponds
-           to the global label <code>-&gt;bf_main</code>), and cast it to a function pointer.</p>
-        <p>The <code>link_and_encode</code> function is defined as follows:</p>
-        <pre class="diff"><span class="p">#if _WIN32</span>
+<span class="p">return (void(*)(bf_state_t*))labels[lbl_bf_main];</span></pre>
+<p>第一行调用了我们定义的 <code>epilogue</code> 宏. 下一行调用 <code>link_and_encode</code>, 一会给出. 然后调用 <code><a href="reference.html#dasm_free">dasm_free</a></code>, 用来释放 DynASM state. 最后, 我们将之前定义的 <code>labels</code> 数组传递到 <code><a href="reference.html#dasm_setupglobal">dasm_setupglobal</a></code>, 数组的索引是 <code>lbl_bf_main</code> (由 <code>.globals lbl_</code>    定义, 并与全局标签 <code>-&gt;bf_main</code> 对应), 并将其转换为函数指针.
+</p>
+<p><code>link_and_encode</code> 函数的定义如下:</p>
+<pre class="diff">
+<span class="p">#if _WIN32</span>
 <span class="p">#include &lt;Windows.h&gt;</span>
 <span class="p">#else</span>
 <span class="p">#include &lt;sys/mman.h&gt;</span>
@@ -542,14 +613,12 @@ int main(int argc, char** argv)
 <span class="p">  mprotect(buf, sz, PROT_READ | PROT_EXEC);</span>
 <span class="p">#endif</span>
 <span class="p">  return buf;</span>
-<span class="p">}</span></pre>
-        <p>The particularly interesting calls are to <code><a href="reference.html#dasm_link">dasm_link</a></code> and <code><a href="reference.html#dasm_encode">dasm_encode</a></code>. The remaining calls use operating system functionality
-           to allocate a block of read-write memory and then convert said block to read-execute. Note that we could have allocated a block of read-write-execute
-           memory, but it is generally considered bad form to have memory which is writable and executable at the same time.</p>
-      <hr>
-      <h2 id="compiling">Compiling</h2>
-        <p>If you've been following along, your <code>tutorial.c</code> should now correspond to the following:</p>
-        <pre class="listing">||#if ((defined(_M_X64) || defined(__amd64__)) != X64) || (defined(_WIN32) != WIN)
+<span class="p">}</span></pre>
+<p>值得注意的是<code><a href="reference.html#dasm_link">dasm_link</a></code> 和 <code><a href="reference.html#dasm_encode">dasm_encode</a></code> 调用. 其余的函数调用使用操作系统功能来分配一个 读-写 内存块, 然后将其转换为 读-执行. 注意, 我们可以分配一个 读-写-执行 内存块, 但是通常同时具有可写和可执行的内存不是好的的形式.</p>
+<hr>
+<h2 id="compiling">Compiling</h2>
+<p>根据上面的教程, 现在 <code>tutorial.c</code> 是这个样子的:</p>
+<pre class="listing">||#if ((defined(_M_X64) || defined(__amd64__)) != X64) || (defined(_WIN32) != WIN)
 #error "Wrong DynASM flags used: pass `-D X64` and/or `-D WIN` to dynasm.lua as appropriate"
 #endif
 #include &lt;stdio.h&gt;
@@ -813,26 +882,81 @@ int main(int argc, char** argv)
     fprintf(stderr, "Usage: %s INFILE.bf\n", argv[0]);
     return 1;
   }
-}</pre>
-        <p>If you've not been following that closely, you can reach the same state by doing:</p>
-        <pre><span class="c">git clone https://github.com/corsix/dynasm-doc.git</span>
+}</pre>
+<p>如果没跟上, 还可以从这里获取代码:</p>
+<pre><span class="c">git clone https://github.com/corsix/dynasm-doc.git</span>
 <span class="c">cd dynasm-doc</span>
 <span class="c">git submodule update --init</span>
 <span class="c">cp bf_dynasm.c tutorial.c</span></pre>
-        <p>In order to compile <code>tutorial.c</code>, we first need to run it through the DynASM preprocessor. Said preprocessor is written in Lua, so we'll
-           first compile a minimal Lua interpreter:</p>
-        <pre><span class="c">gcc -o minilua luajit-2.0/src/host/minilua.c</span></pre>
-        <p>With this interpreter in place, we can run the DynASM preprocessor:</p>
-        <pre><span class="c">./minilua luajit-2.0/dynasm/dynasm.lua -o tutorial.posix64.c -D X64 tutorial.c</span></pre>
-        <p>With preprocessing done, we can now invoke a C compiler:</p>
-        <pre><span class="c">gcc -o tutorial tutorial.posix64.c</span></pre>
-        <p>We can then run the resulting executable, which should fairly quickly render the Mandelbrot set:</p>
-        <pre><span class="c">./tutorial mandelbrot.bf</span></pre>
-      </div>
-      <div class="col-md-3">
-        <div class="sidenav hidden-print" role="complementary">
-          <ul class="nav">
-                        <li>
+<p>为了编译 <code>tutorial.c</code>, 我们首先需要通过 DynASM 预处理程序运行它. 预处理器是用 Lua 编写的, 因此我们首先编译一个 minimal Lua 解释器 (如果有luajit也可以直接用luajit运行dynasm.lua, 就可以省略这一步):</p>
+<pre><span class="c">gcc -o minilua luajit-2.0/src/host/minilua.c</span></pre>
+<p>然后运行 DynASM 预处理器:</p>
+<pre><span class="c">./minilua luajit-2.0/dynasm/dynasm.lua -o tutorial.posix64.c -D X64 tutorial.c</span></pre>
+<p>完成预处理后, 调用 C 编译器:</p>
+<pre><span class="c">gcc -o tutorial tutorial.posix64.c</span></pre>
+<p>然后, 我们可以运行生成的可执行文件, 该可执行文件将很快运行 Mandelbrot set:</p>
+<pre><span class="c">./tutorial mandelbrot.bf</span></pre>
+<p>(译者我的运行结果, 2.129s, 源程序是 35.466s, 耗时是原来的 6%, 性能提升了17倍)</p>
+<pre>
+[root@m01 dynasm-doc]# time ./tutorial mandelbrot.bf
+AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDEGFFEEEEDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAAAABBBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDEEEFGIIGFFEEEDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAABBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEFFFI KHGGGHGEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAABBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEFFGHIMTKLZOGFEEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAABBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEEFGGHHIKPPKIHGFFEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBBBB
+AAAAAAAAAABBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGHIJKS  X KHHGFEEEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBB
+AAAAAAAAABBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGQPUVOTY   ZQL[MHFEEEEEEEDDDDDDDCCCCCCCCCCCBBBBBBBBBBBBBB
+AAAAAAAABBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEFFFFFGGHJLZ         UKHGFFEEEEEEEEDDDDDCCCCCCCCCCCCBBBBBBBBBBBB
+AAAAAAABBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEFFFFFFGGGGHIKP           KHHGGFFFFEEEEEEDDDDDCCCCCCCCCCCBBBBBBBBBBB
+AAAAAAABBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEEFGGHIIHHHHHIIIJKMR        VMKJIHHHGFFFFFFGSGEDDDDCCCCCCCCCCCCBBBBBBBBB
+AAAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDEEEEEEFFGHK   MKJIJO  N R  X      YUSR PLV LHHHGGHIOJGFEDDDCCCCCCCCCCCCBBBBBBBB
+AAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDEEEEEEEEEFFFFGH O    TN S                       NKJKR LLQMNHEEDDDCCCCCCCCCCCCBBBBBBB
+AAAAABBCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDEEEEEEEEEEEEFFFFFGHHIN                                 Q     UMWGEEEDDDCCCCCCCCCCCCBBBBBB
+AAAABBCCCCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEFFFFFFGHIJKLOT                                     [JGFFEEEDDCCCCCCCCCCCCCBBBBB
+AAAABCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEEFFFFFFGGHYV RQU                                     QMJHGGFEEEDDDCCCCCCCCCCCCCBBBB
+AAABCCCCCCCCCCCCCCCCCDDDDDDDEEFJIHFFFFFFFFFFFFFFGGGGGGHIJN                                            JHHGFEEDDDDCCCCCCCCCCCCCBBB
+AAABCCCCCCCCCCCDDDDDDDDDDEEEEFFHLKHHGGGGHHMJHGGGGGGHHHIKRR                                           UQ L HFEDDDDCCCCCCCCCCCCCCBB
+AABCCCCCCCCDDDDDDDDDDDEEEEEEFFFHKQMRKNJIJLVS JJKIIIIIIJLR                                               YNHFEDDDDDCCCCCCCCCCCCCBB
+AABCCCCCDDDDDDDDDDDDEEEEEEEFFGGHIJKOU  O O   PR LLJJJKL                                                OIHFFEDDDDDCCCCCCCCCCCCCCB
+AACCCDDDDDDDDDDDDDEEEEEEEEEFGGGHIJMR              RMLMN                                                 NTFEEDDDDDDCCCCCCCCCCCCCB
+AACCDDDDDDDDDDDDEEEEEEEEEFGGGHHKONSZ                QPR                                                NJGFEEDDDDDDCCCCCCCCCCCCCC
+ABCDDDDDDDDDDDEEEEEFFFFFGIPJIIJKMQ                   VX                                                 HFFEEDDDDDDCCCCCCCCCCCCCC
+ACDDDDDDDDDDEFFFFFFFGGGGHIKZOOPPS                                                                      HGFEEEDDDDDDCCCCCCCCCCCCCC
+ADEEEEFFFGHIGGGGGGHHHHIJJLNY                                                                        TJHGFFEEEDDDDDDDCCCCCCCCCCCCC
+A                                                                                                 PLJHGGFFEEEDDDDDDDCCCCCCCCCCCCC
+ADEEEEFFFGHIGGGGGGHHHHIJJLNY                                                                        TJHGFFEEEDDDDDDDCCCCCCCCCCCCC
+ACDDDDDDDDDDEFFFFFFFGGGGHIKZOOPPS                                                                      HGFEEEDDDDDDCCCCCCCCCCCCCC
+ABCDDDDDDDDDDDEEEEEFFFFFGIPJIIJKMQ                   VX                                                 HFFEEDDDDDDCCCCCCCCCCCCCC
+AACCDDDDDDDDDDDDEEEEEEEEEFGGGHHKONSZ                QPR                                                NJGFEEDDDDDDCCCCCCCCCCCCCC
+AACCCDDDDDDDDDDDDDEEEEEEEEEFGGGHIJMR              RMLMN                                                 NTFEEDDDDDDCCCCCCCCCCCCCB
+AABCCCCCDDDDDDDDDDDDEEEEEEEFFGGHIJKOU  O O   PR LLJJJKL                                                OIHFFEDDDDDCCCCCCCCCCCCCCB
+AABCCCCCCCCDDDDDDDDDDDEEEEEEFFFHKQMRKNJIJLVS JJKIIIIIIJLR                                               YNHFEDDDDDCCCCCCCCCCCCCBB
+AAABCCCCCCCCCCCDDDDDDDDDDEEEEFFHLKHHGGGGHHMJHGGGGGGHHHIKRR                                           UQ L HFEDDDDCCCCCCCCCCCCCCBB
+AAABCCCCCCCCCCCCCCCCCDDDDDDDEEFJIHFFFFFFFFFFFFFFGGGGGGHIJN                                            JHHGFEEDDDDCCCCCCCCCCCCCBBB
+AAAABCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEEFFFFFFGGHYV RQU                                     QMJHGGFEEEDDDCCCCCCCCCCCCCBBBB
+AAAABBCCCCCCCCCCCCCCCCCCCCCCCCCDDDDEEEEEEEEEEEEEEEFFFFFFGHIJKLOT                                     [JGFFEEEDDCCCCCCCCCCCCCBBBBB
+AAAAABBCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDEEEEEEEEEEEEFFFFFGHHIN                                 Q     UMWGEEEDDDCCCCCCCCCCCCBBBBBB
+AAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDEEEEEEEEEFFFFGH O    TN S                       NKJKR LLQMNHEEDDDCCCCCCCCCCCCBBBBBBB
+AAAAAABBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDEEEEEEFFGHK   MKJIJO  N R  X      YUSR PLV LHHHGGHIOJGFEDDDCCCCCCCCCCCCBBBBBBBB
+AAAAAAABBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEEFGGHIIHHHHHIIIJKMR        VMKJIHHHGFFFFFFGSGEDDDDCCCCCCCCCCCCBBBBBBBBB
+AAAAAAABBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEFFFFFFGGGGHIKP           KHHGGFFFFEEEEEEDDDDDCCCCCCCCCCCBBBBBBBBBBB
+AAAAAAAABBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEFFFFFGGHJLZ         UKHGFFEEEEEEEEDDDDDCCCCCCCCCCCCBBBBBBBBBBBB
+AAAAAAAAABBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGQPUVOTY   ZQL[MHFEEEEEEEDDDDDDDCCCCCCCCCCCBBBBBBBBBBBBBB
+AAAAAAAAAABBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDEEEEEEFFGHIJKS  X KHHGFEEEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBB
+AAAAAAAAAAABBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEEFGGHHIKPPKIHGFFEEEDDDDDDDDDCCCCCCCCCCBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAABBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDEEEEEFFGHIMTKLZOGFEEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAABBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDEEEEFFFI KHGGGHGEDDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBB
+AAAAAAAAAAAAAAABBBBBBBBBBBBBCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCDDDDDDDDDDEEEFGIIGFFEEEDDDDDDDDCCCCCCCCCBBBBBBBBBBBBBBBBBBBBBBBBBB
+real 0m2.129s
+user 0m2.126s
+sys 0m0.003s
+
+</pre>
+            </div>
+            <div class="col-md-3">
+                <div class="sidenav hidden-print" role="complementary">
+                    <ul class="nav">
+                                    <li>
               <a href="#introduction">Introduction</a>
             </li>
             <li>
@@ -870,18 +994,19 @@ int main(int argc, char** argv)
             <li>
               <a href="#compiling">Compiling</a>
             </li>
-            <li class="top"><a href="#top">Back to top</a></li>
-          </ul>
+                        <li class="top"><a href="#top">Back to top</a></li>
+                    </ul>
+                </div>
+            </div>
         </div>
-      </div>
-    </div>
     </div>
     <div class="footer">
-      <a href="http://luajit.org/dynasm.html">DynASM</a> is free software developed by <a href="http://luajit.org/contact.html">Mike Pall</a>, released under the <a href="http://www.opensource.org/licenses/mit-license.php">MIT license</a>.<br>
-      This documentation is authored by <a href="https://github.com/corsix">Peter Cawley</a>, and is released as <a rel="license" href="http://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.
+        <a href="http://luajit.org/dynasm.html">DynASM</a> is free software developed by <a href="http://luajit.org/contact.html">Mike Pall</a>, released under the <a href="http://www.opensource.org/licenses/mit-license.php">MIT license</a>.<br> This
+        documentation is authored by <a href="https://github.com/corsix">Peter Cawley</a>, translate by <a href="https://github.com/karminski">Zhang Xuhong (karminski-牙医)</a> and is released as <a rel="license" href="http://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.
     </div>
     <script src="js/jquery.min.js"></script>
     <script src="js/bootstrap.min.js"></script>
     <script src="js/dynasm-doc.js"></script>
-  </body>
+</body>
+
 </html>
