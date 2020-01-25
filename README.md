@@ -10,7 +10,7 @@ To contribute to the documentation, edit the source files in the doc-gen directo
 DynASM 文档中文翻译 by @karminski-牙医.
 
 - 原版文档地址: [http://corsix.github.io/dynasm-doc/](http://corsix.github.io/dynasm-doc/). 
-- 中文文档点击: []().
+- 中文文档点击: [https://karminski.github.io/dynasm-doc/](https://karminski.github.io/dynasm-doc/).
 
 本文档为 @corsix 的[英文文档](https://github.com/corsix/dynasm-doc)的翻译版本. 如想要贡献文档, 请直接点击原 repo 查看详情. 
 
